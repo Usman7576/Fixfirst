@@ -8,6 +8,8 @@ dependencies = [
     "triage-db",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
+    "pyjwt>=2.9",
+    "httpx>=0.27",
 ]
 
 [tool.uv.sources]

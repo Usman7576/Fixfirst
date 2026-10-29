@@ -4,6 +4,12 @@ from pydantic import ValidationError
 from triage_core.settings import Environment, Settings
 
 ASYNC_URL = "postgresql+asyncpg://u:p@localhost:5432/db"
+DEPLOYED = {
+    "jwt_signing_key": "x" * 40,
+    "token_encryption_key": "A" * 43 + "=",
+    "github_client_id": "client-id",
+    "github_client_secret": "client-secret",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -22,9 +28,37 @@ def test_defaults_are_local_and_human_readable_logs() -> None:
 
 
 def test_non_local_environments_log_json() -> None:
-    settings = Settings(database_url=ASYNC_URL, environment="staging", _env_file=None)  # type: ignore[call-arg]
+    settings = Settings(database_url=ASYNC_URL, environment="staging", **DEPLOYED, _env_file=None)  # type: ignore[call-arg]
 
     assert settings.json_logs
+    assert settings.secure_cookies
+
+
+@pytest.mark.parametrize("environment", ["staging", "production"])
+def test_deployed_environments_require_real_secrets(environment: str) -> None:
+    with pytest.raises(ValidationError, match=r"JWT_SIGNING_KEY.*TOKEN_ENCRYPTION_KEY"):
+        Settings(database_url=ASYNC_URL, environment=environment, _env_file=None)  # type: ignore[call-arg]
+
+
+def test_local_uses_fixed_dev_keys_when_unset() -> None:
+    settings = Settings(database_url=ASYNC_URL, _env_file=None)  # type: ignore[call-arg]
+
+    assert len(settings.jwt_key) >= 32
+    assert settings.fernet_key
+    assert not settings.github_oauth_configured
+
+
+def test_short_jwt_key_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="jwt_signing_key"):
+        Settings(database_url=ASYNC_URL, jwt_signing_key="too-short", _env_file=None)  # type: ignore[call-arg]
+
+
+def test_empty_github_secret_means_oauth_not_configured() -> None:
+    settings = Settings(  # type: ignore[call-arg]
+        database_url=ASYNC_URL, github_client_id="id", github_client_secret="", _env_file=None
+    )
+
+    assert not settings.github_oauth_configured
 
 
 @pytest.mark.parametrize(

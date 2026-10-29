@@ -7,6 +7,7 @@ from sqlalchemy import Connection, pool
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from triage_core.settings import get_settings
+from triage_db import models  # noqa: F401  (registers tables on Base.metadata)
 from triage_db.base import Base
 
 config = context.config

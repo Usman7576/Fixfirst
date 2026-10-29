@@ -80,7 +80,13 @@ def test_cors_allows_only_the_web_origin(client: TestClient) -> None:
 
 
 def test_docs_are_disabled_in_production() -> None:
-    with TestClient(create_app(_settings(environment="production"))) as client:
+    secrets = {
+        "jwt_signing_key": "x" * 40,
+        "token_encryption_key": "A" * 43 + "=",
+        "github_client_id": "id",
+        "github_client_secret": "secret",
+    }
+    with TestClient(create_app(_settings(environment="production", **secrets))) as client:
         assert client.get("/api/v1/docs").status_code == 404
         assert client.get("/api/v1/openapi.json").status_code == 404
 

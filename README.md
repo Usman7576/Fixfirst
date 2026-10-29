@@ -7,7 +7,9 @@
 Connects to a GitHub repository, runs Semgrep and OSV-Scanner, deduplicates the findings, and uses an
 LLM pipeline to judge exploitability, rank and explain each issue, and suggest fixes.
 
-**Status:** week 1 — foundation. See the [planning document](docs/Fixfirst-Planning-Document.pdf)
+**Status:** week 2 — data model, GitHub sign-in, repositories and the job queue. Scans are queued
+and picked up by the worker, but the scanning pipeline itself arrives in week 3. See the
+[planning document](docs/Fixfirst-Planning-Document.pdf)
 for the full design and roadmap, and [docs/adr](docs/adr/README.md) for the decisions behind it.
 
 ## Repository layout
@@ -42,6 +44,27 @@ docker compose up --build
 The `migrate` service applies Alembic migrations before the API and worker start. The API is
 healthy only when the database is reachable and migrated to head; the worker is healthy while its
 heartbeat file is fresh.
+
+### GitHub sign-in
+
+Sign-in needs your own GitHub OAuth App (without one, `/auth/github/login` returns 503):
+
+1. GitHub → **Settings → Developer settings → OAuth Apps → New OAuth App**.
+2. Homepage URL `http://localhost:5173`; callback URL
+   `http://localhost:8000/api/v1/auth/github/callback`.
+3. Put the client ID and a generated client secret in a `.env` file at the repo root
+   (it is git-ignored; Compose reads it automatically):
+
+```bash
+printf 'GITHUB_CLIENT_ID=%s\nGITHUB_CLIENT_SECRET=%s\n' "<client id>" "<client secret>" >> .env
+```
+
+The app asks only for `read:user user:email`, so it can list your public repositories but
+cannot change anything on GitHub.
+
+Local and CI runs use fixed development keys for JWT signing and token encryption. Staging and
+production refuse to start unless `JWT_SIGNING_KEY` (32+ characters), `TOKEN_ENCRYPTION_KEY`
+(a Fernet key) and the GitHub credentials are set.
 
 ## Develop without Docker
 

@@ -5,13 +5,15 @@ import contextlib
 import os
 import signal
 import socket
+from collections.abc import Awaitable, Callable
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from triage_core.logging import configure_logging
 from triage_core.settings import Settings, get_settings
-from triage_db.engine import create_engine, ping
+from triage_db.engine import create_engine, create_session_factory, ping
+from triage_worker.runner import JobRunner
 
 WORKER_ID = f"{socket.gethostname()}-{os.getpid()}"
 DB_CONNECT_ATTEMPTS = 10
@@ -37,13 +39,36 @@ async def wait_for_database(engine: AsyncEngine, attempts: int = DB_CONNECT_ATTE
             await asyncio.sleep(delay)
 
 
-async def worker_loop(settings: Settings, stop: asyncio.Event) -> None:
-    log.info("worker.started", worker_id=WORKER_ID)
+async def _liveness(settings: Settings, stop: asyncio.Event) -> None:
+    """Touches the healthcheck file on its own schedule, so a long job doesn't look like a hang."""
     while not stop.is_set():
         await asyncio.to_thread(settings.worker_heartbeat_file.touch)
-        # Week 2: claim the next job with FOR UPDATE SKIP LOCKED, hold a lease, run it.
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(stop.wait(), timeout=settings.worker_poll_interval_s)
+
+
+async def worker_loop(
+    settings: Settings, stop: asyncio.Event, process_once: Callable[[], Awaitable[bool]]
+) -> None:
+    """Runs jobs back to back while there is work; otherwise sleeps one poll interval.
+
+    On stop, the job in progress finishes (its stage is idempotent) before the loop exits.
+    """
+    log.info("worker.started", worker_id=WORKER_ID)
+    liveness = asyncio.create_task(_liveness(settings, stop))
+    try:
+        while not stop.is_set():
+            try:
+                did_work = await process_once()
+            except Exception:
+                log.exception("worker.poll_failed")
+                did_work = False
+            if not did_work:
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(stop.wait(), timeout=settings.worker_poll_interval_s)
+    finally:
+        stop.set()
+        await liveness
     log.info("worker.stopped", worker_id=WORKER_ID)
 
 
@@ -62,7 +87,8 @@ async def _main(settings: Settings) -> None:
     engine = create_engine(settings)
     try:
         await wait_for_database(engine)
-        await worker_loop(settings, stop)
+        runner = JobRunner(create_session_factory(engine), settings, WORKER_ID)
+        await worker_loop(settings, stop, runner.run_once)
     finally:
         await engine.dispose()
 
