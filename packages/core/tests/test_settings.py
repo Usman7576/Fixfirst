@@ -6,6 +6,13 @@ from triage_core.settings import Environment, Settings
 ASYNC_URL = "postgresql+asyncpg://u:p@localhost:5432/db"
 
 
+@pytest.fixture(autouse=True)
+def _isolate_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    # CI and Compose set these; the tests here assert on the built-in defaults.
+    for name in Settings.model_fields:
+        monkeypatch.delenv(name.upper(), raising=False)
+
+
 def test_defaults_are_local_and_human_readable_logs() -> None:
     settings = Settings(database_url=ASYNC_URL, _env_file=None)  # type: ignore[call-arg]
 
