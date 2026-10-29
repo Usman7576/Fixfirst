@@ -32,8 +32,8 @@ jobs:
       DATABASE_URL: postgresql+asyncpg://triage:triage@localhost:5432/triage_test
       TEST_DATABASE_URL: postgresql+asyncpg://triage:triage@localhost:5432/triage_test
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - run: uv sync --frozen
@@ -59,8 +59,8 @@ jobs:
       run:
         working-directory: apps/web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -76,14 +76,14 @@ jobs:
     name: Security (secrets, dependencies, SAST)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Gitleaks
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
       - name: pip-audit
         run: |
           uv export --frozen --no-emit-workspace --no-hashes --format requirements-txt -o /tmp/requirements.txt
@@ -99,8 +99,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [backend, web]
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
       - name: Backend image
         run: docker buildx build -f infra/docker/backend.Dockerfile --load -t fixfirst-backend:ci .
       - name: Web image
