@@ -1,6 +1,6 @@
 # Local development image for the SPA (production builds are served by Vercel).
 # Build from the repo root: docker build -f infra/docker/web.Dockerfile .
-FROM node:24-alpine
+FROM node:25-alpine
 WORKDIR /app
 COPY apps/web/package.json apps/web/package-lock.json ./
 RUN npm ci --no-fund --no-audit
