@@ -100,7 +100,7 @@ jobs:
     needs: [backend, web]
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - name: Backend image
         run: docker buildx build -f infra/docker/backend.Dockerfile --load -t fixfirst-backend:ci .
       - name: Web image
