@@ -1,0 +1,80 @@
+[project]
+name = "ai-security-triage"
+version = "0.1.0"
+description = "Turns raw scanner alerts into a short, ranked list of real vulnerabilities."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "triage-api",
+    "triage-worker",
+    "triage-core",
+    "triage-db",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.27",
+    "mypy>=1.13",
+    "pre-commit>=4.0",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["apps/api", "apps/worker", "packages/core", "packages/db"]
+
+[tool.uv.sources]
+triage-api = { workspace = true }
+triage-worker = { workspace = true }
+triage-core = { workspace = true }
+triage-db = { workspace = true }
+
+# ---------------------------------------------------------------- ruff
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["apps/web"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F",  # pycodestyle, pyflakes
+    "I",            # isort
+    "B",            # bugbear
+    "UP",           # pyupgrade
+    "S",            # bandit
+    "N",            # pep8-naming
+    "SIM",          # simplify
+    "RUF",
+    "ASYNC",
+    "PT",           # pytest style
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["triage_api", "triage_core", "triage_db", "triage_worker"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["S101", "S105", "S106"]
+"conftest.py" = ["S101"]
+
+# ---------------------------------------------------------------- mypy
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["triage_core", "triage_db", "triage_api", "triage_worker"]
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["asyncpg.*"]
+ignore_missing_imports = true
+
+# ---------------------------------------------------------------- pytest
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib -ra"
+testpaths = ["packages/core/tests", "packages/db/tests", "apps/api/tests", "apps/worker/tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = ["integration: needs a real Postgres at TEST_DATABASE_URL"]

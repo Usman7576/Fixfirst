@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend (lint, types, tests, migrations)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: triage
+          POSTGRES_PASSWORD: triage
+          POSTGRES_DB: triage_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U triage -d triage_test"
+          --health-interval 3s --health-timeout 3s --health-retries 20
+    env:
+      ENVIRONMENT: ci
+      DATABASE_URL: postgresql+asyncpg://triage:triage@localhost:5432/triage_test
+      TEST_DATABASE_URL: postgresql+asyncpg://triage:triage@localhost:5432/triage_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Ruff
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+      - name: Mypy
+        run: uv run mypy
+      - name: Pytest
+        run: uv run pytest
+      - name: Migrations are reversible and match the models
+        run: |
+          uv run alembic -c packages/db/alembic.ini upgrade head
+          uv run alembic -c packages/db/alembic.ini downgrade base
+          uv run alembic -c packages/db/alembic.ini upgrade head
+          uv run alembic -c packages/db/alembic.ini check
+
+  web:
+    name: Web (lint, types, tests, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  security:
+    name: Security (secrets, dependencies, SAST)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: astral-sh/setup-uv@v6
+      - name: pip-audit
+        run: |
+          uv export --frozen --no-emit-workspace --no-hashes --format requirements-txt -o /tmp/requirements.txt
+          uvx pip-audit --requirement /tmp/requirements.txt
+      - name: npm audit
+        working-directory: apps/web
+        run: npm audit --audit-level=high
+      - name: Semgrep (dogfooding)
+        run: uvx semgrep scan --config p/python --config p/typescript --config p/secrets --error --metrics=off
+
+  images:
+    name: Docker images build
+    runs-on: ubuntu-latest
+    needs: [backend, web]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Backend image
+        run: docker buildx build -f infra/docker/backend.Dockerfile --load -t triage-backend:ci .
+      - name: Web image
+        run: docker buildx build -f infra/docker/web.Dockerfile --load -t triage-web:ci .

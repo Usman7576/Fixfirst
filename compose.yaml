@@ -1,0 +1,92 @@
+# Local development stack: docker compose up --build
+#   web    http://localhost:5173
+#   api    http://localhost:8000/api/v1/docs
+#   db     localhost:${DB_PORT:-5432}  (user/password/db: triage)
+name: ai-security-triage
+
+x-backend: &backend
+  build:
+    context: .
+    dockerfile: infra/docker/backend.Dockerfile
+  image: ai-security-triage/backend:dev
+  environment:
+    ENVIRONMENT: local
+    LOG_LEVEL: INFO
+    DATABASE_URL: postgresql+asyncpg://triage:triage@db:5432/triage
+    WEB_ORIGIN: http://localhost:5173
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: triage
+      POSTGRES_PASSWORD: triage
+      POSTGRES_DB: triage
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U triage -d triage"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    <<: *backend
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    <<: *backend
+    ports:
+      - "8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/ready', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  worker:
+    <<: *backend
+    command: ["python", "-m", "triage_worker"]
+    stop_grace_period: 30s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-m", "triage_worker.healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  web:
+    build:
+      context: .
+      dockerfile: infra/docker/web.Dockerfile
+    environment:
+      VITE_API_URL: http://localhost:8000
+      VITE_USE_POLLING: "true"
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./apps/web/src:/app/src
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  pgdata:
