@@ -1,11 +1,13 @@
-# AI Security Triage Platform
+# Fixfirst
+
+**AI security triage for small teams.**
 
 > "Your scanner found 847 issues. We tell you which 12 are real, which 3 to fix today, and how."
 
 Connects to a GitHub repository, runs Semgrep and OSV-Scanner, deduplicates the findings, and uses an
 LLM pipeline to judge exploitability, rank and explain each issue, and suggest fixes.
 
-**Status:** week 1 — foundation. See the [planning document](docs/AI-Security-Triage-Platform-Plan.pdf)
+**Status:** week 1 — foundation. See the [planning document](docs/Fixfirst-Planning-Document.pdf)
 for the full design and roadmap, and [docs/adr](docs/adr/README.md) for the decisions behind it.
 
 ## Repository layout

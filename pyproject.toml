@@ -1,5 +1,5 @@
 [project]
-name = "ai-security-triage"
+name = "fixfirst"
 version = "0.1.0"
 description = "Turns raw scanner alerts into a short, ranked list of real vulnerabilities."
 readme = "README.md"

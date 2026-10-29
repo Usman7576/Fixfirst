@@ -102,6 +102,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - name: Backend image
-        run: docker buildx build -f infra/docker/backend.Dockerfile --load -t triage-backend:ci .
+        run: docker buildx build -f infra/docker/backend.Dockerfile --load -t fixfirst-backend:ci .
       - name: Web image
-        run: docker buildx build -f infra/docker/web.Dockerfile --load -t triage-web:ci .
+        run: docker buildx build -f infra/docker/web.Dockerfile --load -t fixfirst-web:ci .

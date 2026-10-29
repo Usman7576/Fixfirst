@@ -6,7 +6,7 @@ export function Layout() {
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
           <Link to="/" className="font-semibold text-slate-900">
-            AI Security Triage
+            Fixfirst
           </Link>
         </div>
       </header>

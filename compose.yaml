@@ -2,13 +2,13 @@
 #   web    http://localhost:5173
 #   api    http://localhost:8000/api/v1/docs
 #   db     localhost:${DB_PORT:-5432}  (user/password/db: triage)
-name: ai-security-triage
+name: fixfirst
 
 x-backend: &backend
   build:
     context: .
     dockerfile: infra/docker/backend.Dockerfile
-  image: ai-security-triage/backend:dev
+  image: fixfirst/backend:dev
   environment:
     ENVIRONMENT: local
     LOG_LEVEL: INFO
