@@ -14,6 +14,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "httpx>=0.27",
+    "hypothesis>=6.112",
     "mypy>=1.13",
     "pre-commit>=4.0",
     "pytest>=8.3",
@@ -57,7 +58,7 @@ select = [
 known-first-party = ["triage_api", "triage_core", "triage_db", "triage_worker"]
 
 [tool.ruff.lint.per-file-ignores]
-"**/tests/**" = ["S101", "S105", "S106"]
+"**/tests/**" = ["S101", "S105", "S106", "ASYNC240"]  # fakes may touch tmp files
 "conftest.py" = ["S101"]
 
 # ---------------------------------------------------------------- mypy

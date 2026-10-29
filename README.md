@@ -7,9 +7,9 @@
 Connects to a GitHub repository, runs Semgrep and OSV-Scanner, deduplicates the findings, and uses an
 LLM pipeline to judge exploitability, rank and explain each issue, and suggest fixes.
 
-**Status:** week 2 — data model, GitHub sign-in, repositories and the job queue. Scans are queued
-and picked up by the worker, but the scanning pipeline itself arrives in week 3. See the
-[planning document](docs/Fixfirst-Planning-Document.pdf)
+**Status:** week 3 — scans clone the repository, run Semgrep and OSV-Scanner, and turn the
+findings into deduplicated issues that persist across rescans (fixed code closes its issue). AI
+triage arrives in weeks 4–5. See the [planning document](docs/Fixfirst-Planning-Document.pdf)
 for the full design and roadmap, and [docs/adr](docs/adr/README.md) for the decisions behind it.
 
 ## Repository layout

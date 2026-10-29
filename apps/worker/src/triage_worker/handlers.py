@@ -1,58 +1,109 @@
 """Job handlers by kind. Each must be idempotent: a job can run again after a crash."""
 
+import asyncio
+import shutil
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import structlog
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from triage_core.domain import JobKind, ScanStatus
+from triage_core.domain import JobKind, ScanKind, ScanStatus
+from triage_core.findings import Finding
+from triage_core.fingerprint import assign_fingerprints
+from triage_core.settings import Settings
 from triage_db.models import Repository, Scan
+from triage_db.reconcile import reconcile
+from triage_worker import sandbox
+from triage_worker.errors import PermanentJobError
+from triage_worker.scanners.osv import parse_osv, run_osv
+from triage_worker.scanners.semgrep import parse_semgrep, run_semgrep
 
 log = structlog.get_logger()
 
-Handler = Callable[[async_sessionmaker[AsyncSession], dict[str, Any]], Awaitable[None]]
+Sessions = async_sessionmaker[AsyncSession]
+Handler = Callable[[Sessions, dict[str, Any]], Awaitable[None]]
 
 
-class PermanentJobError(Exception):
-    """Retrying won't help (e.g. the scan row is gone); fail the job immediately."""
+async def scan_with_all_tools(src: Path, settings: Settings) -> list[Finding]:
+    semgrep, osv = await asyncio.gather(run_semgrep(src, settings), run_osv(src, settings))
+    return parse_semgrep(semgrep, src, settings.semgrep_rules_dir) + parse_osv(osv, src)
 
 
-async def run_scan(sessions: async_sessionmaker[AsyncSession], payload: dict[str, Any]) -> None:
+@dataclass(frozen=True)
+class ScanTools:
+    """The parts that touch the network and external binaries, swappable in tests."""
+
+    clone: Callable[[str, str, Path, Settings], Awaitable[str]] = sandbox.clone
+    scan: Callable[[Path, Settings], Awaitable[list[Finding]]] = scan_with_all_tools
+
+
+async def run_scan(
+    sessions: Sessions, payload: dict[str, Any], settings: Settings, tools: ScanTools
+) -> None:
     scan_id = uuid.UUID(payload["scan_id"])
     structlog.contextvars.bind_contextvars(scan_id=str(scan_id))
+    workdir = settings.scan_work_dir / str(scan_id)
     async with sessions() as session:
         scan = await session.get(Scan, scan_id)
         if scan is None:
-            raise PermanentJobError(f"scan {scan_id} not found")
-        if scan.status is ScanStatus.CANCELLED:
-            log.info("scan.skipped_cancelled")
+            raise PermanentJobError("Scan no longer exists")
+        if scan.status in (ScanStatus.CANCELLED, ScanStatus.DONE):
+            log.info("scan.skipped", status=scan.status)
             return
+        repo = await session.get(Repository, scan.repo_id)
+        if repo is None or repo.deleted_at is not None:
+            raise PermanentJobError("Repository was disconnected")
+
+        async def stage(name: str, **progress: Any) -> None:
+            scan.stage = name
+            scan.progress = {"stage": name, **progress}
+            await session.commit()
+            log.info("scan.stage", stage=name)
+
         scan.status = ScanStatus.RUNNING
         scan.started_at = scan.started_at or datetime.now(UTC)
-        scan.stage = "starting"
-        await session.commit()
+        scan.failure_reason = None
+        await stage("cloning")
 
-        # Week 3 adds the real stages here: clone → scan → normalise → dedupe → reconcile.
-        log.warning("scan.pipeline_not_implemented")
+        shutil.rmtree(workdir, ignore_errors=True)  # leftovers from a crashed attempt
+        workdir.mkdir(parents=True)
+        try:
+            src = workdir / "src"
+            scan.commit_sha = await tools.clone(
+                repo.github_full_name, repo.default_branch, src, settings
+            )
+            await stage("scanning", commit_sha=scan.commit_sha)
 
-        now = datetime.now(UTC)
-        scan.status = ScanStatus.DONE
-        scan.stage = "done"
-        scan.finished_at = now
-        await session.execute(
-            update(Repository).where(Repository.id == scan.repo_id).values(last_scanned_at=now)
-        )
-        await session.commit()
-    log.info("scan.completed")
+            findings = assign_fingerprints(await tools.scan(src, settings))
+            await stage("reconciling", raw_count=len(findings))
+
+            result = await reconcile(session, scan, findings, full_scan=scan.kind is ScanKind.FULL)
+            now = datetime.now(UTC)
+            scan.raw_count = result.raw_count
+            scan.issue_count = result.issue_count
+            scan.status = ScanStatus.DONE
+            scan.finished_at = now
+            repo.last_scanned_at = now
+            await stage(
+                "done",
+                raw_count=result.raw_count,
+                issue_count=result.issue_count,
+                new=result.new,
+                reopened=result.reopened,
+                fixed=result.fixed,
+            )
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
+    log.info("scan.completed", raw=result.raw_count, issues=result.issue_count, fixed=result.fixed)
 
 
-async def mark_scan_failed(
-    sessions: async_sessionmaker[AsyncSession], payload: dict[str, Any], reason: str
-) -> None:
+async def mark_scan_failed(sessions: Sessions, payload: dict[str, Any], reason: str) -> None:
     """Called once a scan job has used up its retries, so the UI shows why it stopped."""
     try:
         scan_id = uuid.UUID(payload["scan_id"])
@@ -71,7 +122,16 @@ async def mark_scan_failed(
         await session.commit()
 
 
-HANDLERS: dict[str, Handler] = {JobKind.SCAN: run_scan}
+def build_handlers(settings: Settings, tools: ScanTools | None = None) -> dict[str, Handler]:
+    scan_tools = tools or ScanTools()
+
+    async def scan(sessions: Sessions, payload: dict[str, Any]) -> None:
+        await run_scan(sessions, payload, settings, scan_tools)
+
+    return {JobKind.SCAN: scan}
+
 
 # What to do to domain rows when a job of this kind gives up for good.
-ON_FINAL_FAILURE: dict[str, Callable[..., Awaitable[None]]] = {JobKind.SCAN: mark_scan_failed}
+ON_FINAL_FAILURE: dict[str, Callable[[Sessions, dict[str, Any], str], Awaitable[None]]] = {
+    JobKind.SCAN: mark_scan_failed
+}

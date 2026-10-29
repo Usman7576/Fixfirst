@@ -54,6 +54,16 @@ class Settings(BaseSettings):
     job_lease_s: int = Field(default=60, ge=10)
     job_max_attempts: int = Field(default=3, ge=1)
 
+    # Scanning limits (plan section 8.1). Clones live under scan_work_dir only while scanning.
+    scan_work_dir: Path = Path(tempfile.gettempdir()) / "fixfirst-scans"
+    scan_max_repo_mb: int = Field(default=200, ge=1)
+    scan_max_files: int = Field(default=20_000, ge=1)
+    scan_clone_timeout_s: int = Field(default=120, ge=5)
+    scan_timeout_s: int = Field(default=600, ge=10)
+    semgrep_bin: str = "semgrep"
+    semgrep_rules_dir: Path = Path("/opt/semgrep-rules")
+    osv_scanner_bin: str = "osv-scanner"
+
     @field_validator("database_url")
     @classmethod
     def _require_async_driver(cls, value: str) -> str:

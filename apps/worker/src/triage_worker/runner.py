@@ -12,7 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from triage_core.settings import Settings
 from triage_db import jobs
 from triage_db.models import Job
-from triage_worker.handlers import HANDLERS, ON_FINAL_FAILURE, Handler, PermanentJobError
+from triage_worker.errors import PermanentJobError, TransientJobError
+from triage_worker.handlers import ON_FINAL_FAILURE, Handler, build_handlers
 
 REAP_INTERVAL_S = 30.0
 
@@ -30,7 +31,7 @@ class JobRunner:
         self._sessions = sessions
         self._worker_id = worker_id
         self._lease = timedelta(seconds=settings.job_lease_s)
-        self._handlers = handlers if handlers is not None else HANDLERS
+        self._handlers = handlers if handlers is not None else build_handlers(settings)
         self._last_reap = float("-inf")
 
     async def run_once(self) -> bool:
@@ -67,7 +68,7 @@ class JobRunner:
                     await heartbeat
 
     async def _handle_failure(self, job: Job, exc: Exception) -> None:
-        error = f"{type(exc).__name__}: {exc}"
+        error = f"{type(exc).__name__}: {exc}"  # full detail for operators, in jobs.last_error
         if isinstance(exc, PermanentJobError):
             job.attempts = job.max_attempts  # don't retry
         async with self._sessions() as session:
@@ -76,7 +77,10 @@ class JobRunner:
             log.warning("job.failed_will_retry", error=error)
             return
         log.error("job.failed_permanently", error=error, exc_info=exc)
-        await self._final_failure(job, error)
+        # Users see our own messages; anything else might leak internals, so keep it generic.
+        known = isinstance(exc, PermanentJobError | TransientJobError)
+        reason = str(exc) if known else f"Unexpected error while scanning (job {job.id})"
+        await self._final_failure(job, reason)
 
     async def _final_failure(self, job: Job, error: str) -> None:
         on_failure = ON_FINAL_FAILURE.get(job.kind)

@@ -3,6 +3,7 @@
 import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -10,16 +11,34 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from triage_core.domain import JobKind, JobStatus, ScanStatus
+from triage_core.findings import Finding
 from triage_core.settings import Settings
 from triage_db import jobs
 from triage_db.models import Job, Repository, Scan, Team
-from triage_worker.handlers import run_scan
+from triage_worker.errors import TransientJobError
+from triage_worker.handlers import ScanTools, build_handlers, run_scan
 from triage_worker.runner import JobRunner
 
 pytestmark = pytest.mark.integration
 
 Sessions = async_sessionmaker[AsyncSession]
 LEASE = timedelta(seconds=60)
+
+
+async def _fake_clone(full_name: str, branch: str, dest: Path, settings: Settings) -> str:
+    dest.mkdir(parents=True)
+    return "0" * 40
+
+
+async def _no_findings(src: Path, settings: Settings) -> list[Finding]:
+    return []
+
+
+FAKE_TOOLS = ScanTools(clone=_fake_clone, scan=_no_findings)
+
+
+def _runner(sessions: Sessions, settings: Settings, worker_id: str) -> JobRunner:
+    return JobRunner(sessions, settings, worker_id, handlers=build_handlers(settings, FAKE_TOOLS))
 
 
 async def _scan_job(sessions: Sessions, *, max_attempts: int = 3) -> tuple[uuid.UUID, uuid.UUID]:
@@ -54,7 +73,7 @@ async def _get(sessions: Sessions, model: Any, key: uuid.UUID) -> Any:
 async def test_runner_completes_a_scan_job(sessions: Sessions, settings: Settings) -> None:
     job_id, scan_id = await _scan_job(sessions)
 
-    did_work = await JobRunner(sessions, settings, "w1").run_once()
+    did_work = await _runner(sessions, settings, "w1").run_once()
 
     assert did_work
     job, scan = await _get(sessions, Job, job_id), await _get(sessions, Scan, scan_id)
@@ -66,7 +85,7 @@ async def test_runner_completes_a_scan_job(sessions: Sessions, settings: Setting
 
 
 async def test_idle_runner_reports_no_work(sessions: Sessions, settings: Settings) -> None:
-    assert await JobRunner(sessions, settings, "w1").run_once() is False
+    assert await _runner(sessions, settings, "w1").run_once() is False
 
 
 async def test_concurrent_claims_never_return_the_same_job(sessions: Sessions) -> None:
@@ -100,7 +119,7 @@ async def test_failed_job_is_retried_later_with_backoff(
     assert job.run_after > datetime.now(UTC) + timedelta(seconds=20)
     assert "clone timed out" in job.last_error
     # Not runnable yet, so an immediate poll finds nothing.
-    assert await JobRunner(sessions, settings, "w2").run_once() is False
+    assert await _runner(sessions, settings, "w2").run_once() is False
 
 
 async def test_job_out_of_attempts_fails_and_marks_the_scan_failed(
@@ -109,7 +128,7 @@ async def test_job_out_of_attempts_fails_and_marks_the_scan_failed(
     job_id, scan_id = await _scan_job(sessions, max_attempts=1)
 
     async def boom(_: Sessions, __: dict[str, Any]) -> None:
-        raise RuntimeError("semgrep crashed")
+        raise TransientJobError("semgrep crashed")
 
     await JobRunner(sessions, settings, "w1", handlers={JobKind.SCAN: boom}).run_once()
 
@@ -151,7 +170,7 @@ async def test_reaper_requeues_jobs_from_dead_workers(
     await _expire_lease(sessions, job_id, attempts=1)
 
     # The reap runs first in run_once, then the same runner picks the job back up.
-    await JobRunner(sessions, settings, "w2").run_once()
+    await _runner(sessions, settings, "w2").run_once()
 
     job = await _get(sessions, Job, job_id)
     assert job.status is JobStatus.DONE
@@ -163,7 +182,7 @@ async def test_reaper_fails_jobs_out_of_attempts(sessions: Sessions, settings: S
     job_id, scan_id = await _scan_job(sessions, max_attempts=2)
     await _expire_lease(sessions, job_id, attempts=2)
 
-    await JobRunner(sessions, settings, "w2").run_once()
+    await _runner(sessions, settings, "w2").run_once()
 
     assert (await _get(sessions, Job, job_id)).status is JobStatus.FAILED
     scan = await _get(sessions, Scan, scan_id)
@@ -185,19 +204,19 @@ async def test_heartbeat_fails_once_another_worker_owns_the_job(sessions: Sessio
         assert await jobs.heartbeat(session, job_id, "w2", LEASE) is True
 
 
-async def test_scan_handler_is_idempotent(sessions: Sessions) -> None:
+async def test_scan_handler_is_idempotent(sessions: Sessions, settings: Settings) -> None:
     _, scan_id = await _scan_job(sessions)
 
-    await run_scan(sessions, {"scan_id": str(scan_id)})
+    await run_scan(sessions, {"scan_id": str(scan_id)}, settings, FAKE_TOOLS)
     first = await _get(sessions, Scan, scan_id)
-    await run_scan(sessions, {"scan_id": str(scan_id)})
+    await run_scan(sessions, {"scan_id": str(scan_id)}, settings, FAKE_TOOLS)
     second = await _get(sessions, Scan, scan_id)
 
     assert second.status is ScanStatus.DONE
     assert second.started_at == first.started_at
 
 
-async def test_cancelled_scan_is_skipped(sessions: Sessions) -> None:
+async def test_cancelled_scan_is_skipped(sessions: Sessions, settings: Settings) -> None:
     _, scan_id = await _scan_job(sessions)
     async with sessions() as session:
         await session.execute(
@@ -205,7 +224,7 @@ async def test_cancelled_scan_is_skipped(sessions: Sessions) -> None:
         )
         await session.commit()
 
-    await run_scan(sessions, {"scan_id": str(scan_id)})
+    await run_scan(sessions, {"scan_id": str(scan_id)}, settings, FAKE_TOOLS)
 
     async with sessions() as session:
         status = await session.scalar(select(Scan.status).where(Scan.id == scan_id))
